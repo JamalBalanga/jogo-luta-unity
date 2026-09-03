@@ -6,7 +6,8 @@ public enum HitboxLimb
     RightHand,
     LeftHand,
     RightFoot,
-    LeftFoot
+    LeftFoot,
+    Head
 }
 
 /// <summary>

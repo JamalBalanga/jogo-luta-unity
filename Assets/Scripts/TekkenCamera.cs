@@ -41,29 +41,24 @@ public class TekkenCamera : MonoBehaviour
     {
         if (fighter1 == null || fighter2 == null) return;
 
+        Camera camera = GetComponent<Camera>();
+
         // 1. Calcula o ponto médio entre os lutadores
         Vector3 p1 = fighter1.position;
         Vector3 p2 = fighter2.position;
         Vector3 midpoint = (p1 + p2) * 0.5f;
 
         // 2. Calcula a linha de combate no plano horizontal (XZ)
-        Vector3 combatLine = p2 - p1;
-        combatLine.y = 0f;
-        float fighterDistance = combatLine.magnitude;
-
-        if (fighterDistance < 0.001f)
-        {
-            combatLine = Vector3.right;
-            fighterDistance = 1f;
-        }
-
-        // Vetor perpendicular à linha de combate (normal horizontal que define a visão lateral)
-        Vector3 normal = Vector3.Cross(Vector3.up, combatLine.normalized);
-
-        // 3. Calcula a distância e a posição alvo da câmera
+        // Câmera lateral fixa: a luta acontece apenas no eixo X.
+        float fighterDistance = Mathf.Abs(p2.x - p1.x);
         float currentDistance = baseDistance + (fighterDistance * zoomFactor);
-        Vector3 targetPosition = midpoint + (normal * currentDistance);
+        Vector3 targetPosition = new Vector3(midpoint.x, midpoint.y + height, -currentDistance);
         targetPosition.y = midpoint.y + height;
+        if (camera != null)
+        {
+            camera.orthographic = true;
+            camera.orthographicSize = Mathf.Clamp(3.2f + fighterDistance * 0.22f, 3.2f, 6.5f);
+        }
 
         // Interpolação suave de posição
         transform.position = Vector3.Lerp(transform.position, targetPosition, Time.deltaTime * followDamping);

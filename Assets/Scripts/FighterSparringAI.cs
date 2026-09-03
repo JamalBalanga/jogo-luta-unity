@@ -120,7 +120,7 @@ public class FighterSparringAI : MonoBehaviour
         if (roll < attackChance && distanceToOpponent <= 2.2f)
         {
             movement.ExternalInput = Vector2.zero;
-            controller.TriggerAttack();
+            controller.TriggerAttack(Random.value < 0.65f ? FighterAttackType.Punch : FighterAttackType.Attack2);
             return;
         }
 
@@ -134,7 +134,7 @@ public class FighterSparringAI : MonoBehaviour
                 // Fácil: prefere recuar ou dar passos curtos laterais
                 if (distanceToOpponent < 2.0f)
                 {
-                    moveDir = new Vector2(0f, -0.7f); // Recua
+                    moveDir = new Vector2(transform.position.x < movement.Opponent.position.x ? -0.7f : 0.7f, 0f); // Recua na faixa
                     moveDuration = 0.8f;
                 }
                 else
@@ -149,14 +149,13 @@ public class FighterSparringAI : MonoBehaviour
                 // Médio: mescla aproximação, órbita lateral e recuo
                 if (distanceToOpponent > 3.0f)
                 {
-                    moveDir = new Vector2(0f, 0.8f); // Aproxima
+                    moveDir = new Vector2(transform.position.x < movement.Opponent.position.x ? 0.8f : -0.8f, 0f); // Aproxima
                     moveDuration = 0.7f;
                 }
                 else
                 {
                     float dirX = Random.value > 0.5f ? 1f : -1f;
-                    float dirY = Random.value > 0.6f ? 0.4f : -0.3f;
-                    moveDir = new Vector2(dirX, dirY);
+                    moveDir = new Vector2(dirX, 0f);
                     moveDuration = 0.7f;
                 }
                 break;
@@ -165,7 +164,7 @@ public class FighterSparringAI : MonoBehaviour
                 // Difícil: fecha a distância agressivamente e circula rápido
                 if (distanceToOpponent > 1.6f)
                 {
-                    moveDir = new Vector2(Random.Range(-0.3f, 0.3f), 1.0f); // Persegue
+                    moveDir = new Vector2(transform.position.x < movement.Opponent.position.x ? 1.0f : -1.0f, 0f); // Persegue
                     moveDuration = 0.5f;
                 }
                 else

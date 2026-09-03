@@ -1,350 +1,220 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-/// <summary>
-/// Controlador de movimentação 3D para jogos de luta estilo Tekken.
-/// Gerencia locomoção longitudinal (frente/costas), órbita circular (sidestep)
-/// e executa a transição Walking Turn 180 automaticamente ao mudar a marcha entre frente e recuo.
-/// </summary>
+/// <summary>Movimento 2.5D: A/D movem, W salta e S agacha.</summary>
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
 public class FighterMovement : MonoBehaviour
 {
-    [Header("Opponent Target")]
-    [Tooltip("Transform do lutador oponente para travamento de combate e órbita.")]
     [SerializeField] private Transform opponent;
-
-    [Header("Control Settings")]
-    [Tooltip("Define se este lutador responde aos comandos físicos do teclado/gamepad do jogador (P1) ou apenas à IA (P2).")]
     [SerializeField] private bool isPlayerControlled = true;
-
-    [Header("Movement Velocities")]
-    [Tooltip("Velocidade ao avançar em direção ao oponente.")]
     [SerializeField, Min(0f)] private float forwardSpeed = 4.5f;
-
-    [Tooltip("Velocidade ao recuar para longe do oponente.")]
     [SerializeField, Min(0f)] private float backwardSpeed = 3.5f;
-
-    [Tooltip("Velocidade de translação orbital lateral (Sidestep).")]
-    [SerializeField, Min(0f)] private float sidestepSpeed = 4.0f;
-
-    [Tooltip("Distância mínima permitida em relação ao oponente.")]
     [SerializeField, Min(0.1f)] private float minDistanceToOpponent = 0.75f;
-
-    [Header("Rotation")]
-    [Tooltip("Velocidade de rotação horizontal em graus por segundo.")]
-    [SerializeField, Min(0f)] private float rotationSpeed = 1080f;
-
-    [Header("Physics & Gravity")]
-    [Tooltip("Aceleração da gravidade aplicada no eixo Y.")]
+    [SerializeField, Min(1f)] private float arenaHalfWidth = 9f;
     [SerializeField] private float gravity = -20f;
-
-    [Tooltip("Força constante para baixo ao estar no chão para manter estabilidade.")]
     [SerializeField] private float groundedGravity = -2f;
-
-    [Header("Input System")]
-    [Tooltip("Ação de movimento (Vector2).")]
+    [SerializeField, Min(0f)] private float jumpHeight = 2.2f;
+    [SerializeField] private float laneZ;
+    [SerializeField, Min(0f)] private float laneDepth = 0.35f;
+    [SerializeField, Range(0f, 1f)] private float airControl = .62f;
+    [SerializeField, Range(0f, 1f)] private float crouchSpeedMultiplier = .58f;
+    [SerializeField, Min(0f)] private float impulseDrag = 9f;
+    [SerializeField, Min(1f)] private float maxAttackRootMotionSpeed = 8f;
     [SerializeField] private InputActionReference moveActionReference;
 
-    // Componentes e referências em cache
     private CharacterController characterController;
-    private FighterController fighterController;
+    private Animator animator;
     private InputAction runtimeMoveAction;
     private float verticalVelocity;
+    private bool wasJumpHeld;
+    private float standingHeight;
+    private Vector3 standingCenter;
+    private Vector3 horizontalImpulse;
 
-    // Controle de orientação de marcha (frente vs costas com meia-volta)
-    private bool isFacingAway;
-    private float turn180Cooldown;
-
-    // Propriedades públicas
-    public Transform Opponent
-    {
-        get => opponent;
-        set => opponent = value;
-    }
-
-    public bool IsPlayerControlled
-    {
-        get => isPlayerControlled;
-        set => isPlayerControlled = value;
-    }
-
+    public Transform Opponent { get => opponent; set => opponent = value; }
+    public bool IsPlayerControlled { get => isPlayerControlled; set => isPlayerControlled = value; }
     public bool CanMove { get; set; } = true;
     public bool IsGrounded => characterController != null && characterController.isGrounded;
     public CharacterController CharacterController => characterController;
     public Vector2 CurrentInput { get; private set; }
     public float CurrentSpeedMagnitude => CurrentInput.magnitude;
+    public int CurrentMoveDirection { get; private set; }
     public Vector2 ExternalInput { get; set; }
-    public bool IsFacingAway => isFacingAway;
+    public bool IsFacingAway => false;
+    public bool IsCrouching { get; private set; }
 
     private void Awake()
     {
         characterController = GetComponent<CharacterController>();
-        fighterController = GetComponent<FighterController>();
-
-        if (isPlayerControlled)
-        {
-            InitializeInput();
-        }
+        animator = GetComponent<Animator>();
+        standingHeight = characterController.height;
+        standingCenter = characterController.center;
+        if (isPlayerControlled) InitializeInput();
     }
 
     private void OnEnable()
     {
-        if (isPlayerControlled)
-        {
-            if (moveActionReference != null && moveActionReference.action != null)
-            {
-                moveActionReference.action.actionMap?.Enable();
-                moveActionReference.action.Enable();
-            }
-            runtimeMoveAction?.Enable();
-        }
+        if (!isPlayerControlled) return;
+        moveActionReference?.action?.actionMap?.Enable();
+        moveActionReference?.action?.Enable();
+        runtimeMoveAction?.Enable();
     }
 
-    private void OnDisable()
-    {
-        runtimeMoveAction?.Disable();
-    }
+    private void OnDisable() => runtimeMoveAction?.Disable();
 
     private void OnDestroy()
     {
-        if (moveActionReference == null && runtimeMoveAction != null)
-        {
-            runtimeMoveAction.Dispose();
-        }
+        if (moveActionReference == null) runtimeMoveAction?.Dispose();
     }
 
     private void Update()
     {
-        // 1. Processar entradas do jogador ou da IA
         CurrentInput = ReadMovementInput();
+        HandleJumpAndCrouch(CurrentInput);
+        UpdateMovementAnimation(CurrentInput);
+        FaceOpponent();
 
-        // 2. Atualizar rotação com transição natural de 180 graus ao andar de costas
-        UpdateFacing();
-
-        // 3. Calcular translação horizontal (longitudinal e órbita)
-        Vector3 horizontalMovement = CalculateHorizontalMovement(CurrentInput);
-
-        // 4. Processar gravidade básica
-        Vector3 verticalMovement = CalculateVerticalMovement();
-
-        // 5. Aplicar deslocamento final através do CharacterController
-        Vector3 finalDisplacement = horizontalMovement + verticalMovement;
-        characterController.Move(finalDisplacement);
+        float moveSpeed = CurrentMoveDirection >= 0 ? forwardSpeed : backwardSpeed;
+        if (!characterController.isGrounded) moveSpeed *= airControl;
+        if (IsCrouching) moveSpeed *= crouchSpeedMultiplier;
+        Vector3 locomotion = Vector3.right * (CurrentInput.x * moveSpeed * Time.deltaTime);
+        Vector3 impulseMovement = horizontalImpulse * Time.deltaTime;
+        horizontalImpulse = Vector3.MoveTowards(horizontalImpulse, Vector3.zero, impulseDrag * Time.deltaTime);
+        MoveSafely(locomotion + impulseMovement + CalculateVerticalMovement(), true);
     }
 
     private void InitializeInput()
     {
-        if (moveActionReference != null && moveActionReference.action != null)
+        if (moveActionReference?.action != null)
         {
             runtimeMoveAction = moveActionReference.action;
-            moveActionReference.action.actionMap?.Enable();
+            runtimeMoveAction.actionMap?.Enable();
             runtimeMoveAction.Enable();
+            return;
         }
-        else
-        {
-            runtimeMoveAction = new InputAction(name: "Movement", type: InputActionType.Value, expectedControlType: "Vector2");
-            runtimeMoveAction.AddCompositeBinding("2DVector")
-                .With("Up", "<Keyboard>/w")
-                .With("Down", "<Keyboard>/s")
-                .With("Left", "<Keyboard>/a")
-                .With("Right", "<Keyboard>/d");
 
-            runtimeMoveAction.AddCompositeBinding("2DVector")
-                .With("Up", "<Keyboard>/upArrow")
-                .With("Down", "<Keyboard>/downArrow")
-                .With("Left", "<Keyboard>/leftArrow")
-                .With("Right", "<Keyboard>/rightArrow");
-
-            runtimeMoveAction.AddBinding("<Gamepad>/leftStick");
-            runtimeMoveAction.AddBinding("<Gamepad>/dpad");
-            runtimeMoveAction.Enable();
-        }
+        runtimeMoveAction = new InputAction("Movement", InputActionType.Value, expectedControlType: "Vector2");
+        runtimeMoveAction.AddCompositeBinding("2DVector")
+            .With("Up", "<Keyboard>/w").With("Down", "<Keyboard>/s")
+            .With("Left", "<Keyboard>/a").With("Right", "<Keyboard>/d");
+        runtimeMoveAction.AddBinding("<Gamepad>/leftStick");
+        runtimeMoveAction.Enable();
     }
 
-    /// <summary>
-    /// Lê a entrada de movimento. Se isPlayerControlled for falso, NUNCA lê o teclado (exclusivo para IA).
-    /// </summary>
     private Vector2 ReadMovementInput()
     {
         if (!CanMove) return Vector2.zero;
-
-        // Se houver comando vindo da IA (ExternalInput), tem prioridade absoluta
-        if (ExternalInput.sqrMagnitude > 0.001f)
-        {
-            return ExternalInput;
-        }
-
-        // Se NÃO for o personagem controlado pelo jogador, nunca escuta o teclado
-        if (!isPlayerControlled)
-        {
-            return Vector2.zero;
-        }
+        if (ExternalInput.sqrMagnitude > 0.001f) return ExternalInput;
+        if (!isPlayerControlled) return Vector2.zero;
 
         Vector2 input = Vector2.zero;
-
-        // 1. Polling prioritário do teclado físico do jogador
         if (Keyboard.current != null)
         {
-            float x = 0f;
-            float y = 0f;
-
-            if (Keyboard.current.wKey.isPressed || Keyboard.current.upArrowKey.isPressed) y += 1f;
-            if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed) y -= 1f;
-            if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed) x += 1f;
-            if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed) x -= 1f;
-
-            input = new Vector2(x, y);
+            if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed) input.x -= 1f;
+            if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed) input.x += 1f;
+            if (Keyboard.current.wKey.isPressed || Keyboard.current.upArrowKey.isPressed) input.y += 1f;
+            if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed) input.y -= 1f;
         }
-
-        // 2. Fallback via InputAction (Gamepad)
-        if (input.sqrMagnitude < 0.001f && runtimeMoveAction != null && runtimeMoveAction.enabled)
-        {
+        if (input.sqrMagnitude < 0.001f && runtimeMoveAction?.enabled == true)
             input = runtimeMoveAction.ReadValue<Vector2>();
-        }
-
-        if (input.sqrMagnitude > 1f)
-        {
-            input.Normalize();
-        }
-
-        return input;
+        return Vector2.ClampMagnitude(input, 1f);
     }
 
-    /// <summary>
-    /// Mantém o lutador voltado para o oponente, executando Walking Turn 180 automaticamente
-    /// ao recuar de costas e ao virar novamente de frente.
-    /// </summary>
-    private void UpdateFacing()
+    private void HandleJumpAndCrouch(Vector2 input)
     {
-        if (opponent == null) return;
-
-        Vector3 toOpponent = opponent.position - transform.position;
-        toOpponent.y = 0f;
-
-        if (toOpponent.sqrMagnitude < 0.0001f) return;
-
-        // Transição 180º Automática:
-        // Ao recuar para trás (input.y < -0.15f): gira 180º de costas para o oponente e continua andando
-        if (CurrentInput.y < -0.15f && !isFacingAway && Time.time > turn180Cooldown)
+        IsCrouching = input.y < -0.5f && characterController.isGrounded;
+        characterController.height = IsCrouching ? standingHeight * 0.62f : standingHeight;
+        characterController.center = IsCrouching
+            ? new Vector3(standingCenter.x, standingCenter.y * 0.62f, standingCenter.z)
+            : standingCenter;
+        bool jumpHeld = input.y > 0.5f;
+        if (jumpHeld && !wasJumpHeld && characterController.isGrounded)
         {
-            isFacingAway = true;
-            turn180Cooldown = Time.time + 0.65f;
-            if (fighterController == null) fighterController = GetComponent<FighterController>();
-            fighterController?.CrossFadeAnimation(fighterController.Turn180AnimHash, 0.1f);
+            verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
+            int jumpDirection = GetRelativeMoveDirection(input.x);
+            if (HasParameter("JumpType")) animator.SetInteger("JumpType", jumpDirection > 0 ? 2 : jumpDirection < 0 ? 1 : 0);
+            if (HasParameter("Jump")) animator.SetTrigger("Jump");
         }
-        // Ao avançar para a frente (input.y > 0.15f): gira 180º de volta de frente para o oponente e continua andando
-        else if (CurrentInput.y > 0.15f && isFacingAway && Time.time > turn180Cooldown)
-        {
-            isFacingAway = false;
-            turn180Cooldown = Time.time + 0.65f;
-            if (fighterController == null) fighterController = GetComponent<FighterController>();
-            fighterController?.CrossFadeAnimation(fighterController.Turn180AnimHash, 0.1f);
-        }
-
-        // Se estiver de costas, orienta na direção oposta ao oponente (-toOpponent); senão, encara o oponente (toOpponent)
-        Vector3 targetDirection = isFacingAway ? -toOpponent : toOpponent;
-        Quaternion targetRotation = Quaternion.LookRotation(targetDirection);
-
-        if (rotationSpeed <= 0f)
-        {
-            transform.rotation = targetRotation;
-        }
-        else
-        {
-            transform.rotation = Quaternion.RotateTowards(
-                transform.rotation,
-                targetRotation,
-                rotationSpeed * Time.deltaTime
-            );
-        }
+        wasJumpHeld = jumpHeld;
     }
 
-    /// <summary>
-    /// Calcula a translação horizontal longitudinal e orbital ao redor do oponente.
-    /// </summary>
-    private Vector3 CalculateHorizontalMovement(Vector2 input)
+    private void UpdateMovementAnimation(Vector2 input)
     {
-        if (input.sqrMagnitude < 0.0001f) return Vector3.zero;
+        if (animator == null) return;
+        CurrentMoveDirection = GetRelativeMoveDirection(input.x);
+        if (HasParameter("Crouch")) animator.SetBool("Crouch", IsCrouching);
+        if (HasParameter("CrouchDirection")) animator.SetInteger("CrouchDirection", CurrentMoveDirection);
+        if (HasParameter("MoveDirection")) animator.SetInteger("MoveDirection", CurrentMoveDirection);
+    }
 
-        float dt = Time.deltaTime;
+    private int GetRelativeMoveDirection(float horizontalInput)
+    {
+        if (Mathf.Abs(horizontalInput) <= 0.15f) return 0;
+        if (opponent == null) return horizontalInput > 0f ? 1 : -1;
+        float towardOpponent = Mathf.Sign(opponent.position.x - transform.position.x);
+        return horizontalInput * towardOpponent > 0f ? 1 : -1;
+    }
 
-        if (opponent == null)
-        {
-            float fallbackSpeed = input.y >= 0f ? forwardSpeed : backwardSpeed;
-            return (transform.forward * (input.y * fallbackSpeed) + transform.right * (input.x * sidestepSpeed)) * dt;
-        }
-
-        // 1. Movimento Longitudinal (Frente / Recuo)
-        Vector3 longitudinalDisplacement = Vector3.zero;
-
-        if (Mathf.Abs(input.y) > 0.001f)
-        {
-            Vector3 toOpponent = opponent.position - transform.position;
-            toOpponent.y = 0f;
-            Vector3 forwardDir = toOpponent.normalized;
-
-            if (input.y > 0f)
-            {
-                // Avançando em direção ao oponente
-                float currentDist = toOpponent.magnitude;
-                float moveStep = forwardSpeed * input.y * dt;
-
-                if (currentDist - moveStep > minDistanceToOpponent)
-                {
-                    longitudinalDisplacement = forwardDir * moveStep;
-                }
-                else if (currentDist > minDistanceToOpponent)
-                {
-                    longitudinalDisplacement = forwardDir * (currentDist - minDistanceToOpponent);
-                }
-            }
-            else
-            {
-                // Recuando para longe do oponente
-                longitudinalDisplacement = -forwardDir * (backwardSpeed * Mathf.Abs(input.y) * dt);
-            }
-        }
-
-        // 2. Movimento Lateral Orbital (Sidestep ao redor do oponente com raio fixo)
-        Vector3 orbitalDisplacement = Vector3.zero;
-
-        if (Mathf.Abs(input.x) > 0.001f)
-        {
-            Vector3 fromOpponentToPlayer = transform.position - opponent.position;
-            fromOpponentToPlayer.y = 0f;
-            float radius = fromOpponentToPlayer.magnitude;
-
-            if (radius > 0.001f)
-            {
-                float angularSpeedDegrees = (sidestepSpeed / radius) * Mathf.Rad2Deg;
-                float angleDelta = -input.x * angularSpeedDegrees * dt;
-
-                Quaternion orbitRotation = Quaternion.Euler(0f, angleDelta, 0f);
-                Vector3 rotatedOffset = orbitRotation * fromOpponentToPlayer;
-
-                orbitalDisplacement = rotatedOffset - fromOpponentToPlayer;
-            }
-            else
-            {
-                orbitalDisplacement = transform.right * (input.x * sidestepSpeed * dt);
-            }
-        }
-
-        return longitudinalDisplacement + orbitalDisplacement;
+    private bool HasParameter(string parameterName)
+    {
+        if (animator == null || animator.runtimeAnimatorController == null) return false;
+        foreach (AnimatorControllerParameter parameter in animator.parameters)
+            if (parameter.name == parameterName) return true;
+        return false;
     }
 
     private Vector3 CalculateVerticalMovement()
     {
-        if (characterController.isGrounded && verticalVelocity < 0f)
+        if (characterController.isGrounded && verticalVelocity < 0f) verticalVelocity = groundedGravity;
+        else verticalVelocity += gravity * Time.deltaTime;
+        return Vector3.up * (verticalVelocity * Time.deltaTime);
+    }
+
+    public void ApplyImpulse(Vector3 velocity)
+    {
+        velocity.y = 0f;
+        velocity.z = 0f;
+        horizontalImpulse += velocity;
+    }
+
+    public void ApplyAttackRootMotion(Vector3 delta)
+    {
+        delta.y = 0f;
+        delta.z = 0f;
+        float maxDelta = maxAttackRootMotionSpeed * Time.deltaTime;
+        if (Mathf.Abs(delta.x) > maxDelta) delta.x = Mathf.Sign(delta.x) * maxDelta;
+        MoveSafely(delta, true);
+    }
+
+    public void ResetMotion()
+    {
+        horizontalImpulse = Vector3.zero;
+        verticalVelocity = groundedGravity;
+    }
+
+    private void MoveSafely(Vector3 delta, bool respectOpponentSpacing)
+    {
+        if (characterController == null) return;
+        float desiredX = Mathf.Clamp(transform.position.x + delta.x, -arenaHalfWidth, arenaHalfWidth);
+        if (respectOpponentSpacing && opponent != null)
         {
-            verticalVelocity = groundedGravity;
-        }
-        else
-        {
-            verticalVelocity += gravity * Time.deltaTime;
+            float side = Mathf.Sign(transform.position.x - opponent.position.x);
+            if (Mathf.Approximately(side, 0f)) side = transform.forward.x < 0f ? 1f : -1f;
+            float boundary = opponent.position.x + side * minDistanceToOpponent;
+            desiredX = side < 0f ? Mathf.Min(desiredX, boundary) : Mathf.Max(desiredX, boundary);
         }
 
-        return Vector3.up * (verticalVelocity * Time.deltaTime);
+        float desiredZ = Mathf.Clamp(transform.position.z + delta.z, laneZ - laneDepth, laneZ + laneDepth);
+        Vector3 constrained = new Vector3(desiredX - transform.position.x, delta.y, desiredZ - transform.position.z);
+        CollisionFlags flags = characterController.Move(constrained);
+        if ((flags & CollisionFlags.Below) != 0 && verticalVelocity < 0f) verticalVelocity = groundedGravity;
+    }
+
+    private void FaceOpponent()
+    {
+        if (opponent == null) return;
+        float direction = opponent.position.x >= transform.position.x ? 1f : -1f;
+        transform.rotation = Quaternion.Euler(0f, direction > 0f ? 90f : -90f, 0f);
     }
 }

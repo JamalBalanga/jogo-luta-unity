@@ -7,6 +7,8 @@ using UnityEngine;
 public class AttackState : IFighterState
 {
     private float elapsedTime;
+    private bool hitboxesEnabled;
+    private bool windowOpened;
 
     public void Enter(FighterController fighter)
     {
@@ -15,29 +17,44 @@ public class AttackState : IFighterState
         {
             fighter.Movement.CanMove = false;
         }
+        fighter.SetAttackRootMotion(true);
 
         elapsedTime = 0f;
+        hitboxesEnabled = false;
+        windowOpened = false;
 
         // Dispara a animação de ataque
-        fighter.CrossFadeAnimation(fighter.AttackAnimHash, 0.05f);
+        fighter.CrossFadeAnimation(fighter.CurrentAttackAnimHash, 0.05f);
+        fighter.SetAnimatorSpeed(fighter.CurrentAttackTiming.playbackSpeed);
 
         // Ativa as Hitboxes das mãos para cobrir a sequência do soco
-        fighter.EnableHitbox(HitboxLimb.RightHand);
-        fighter.EnableHitbox(HitboxLimb.LeftHand);
     }
 
     public void Update(FighterController fighter)
     {
         elapsedTime += Time.deltaTime;
+        FighterAttackTiming timing = fighter.CurrentAttackTiming;
+        bool hasAnimationProgress = fighter.TryGetCurrentAttackProgress(out float progress);
+        float attackProgress = hasAnimationProgress
+            ? progress
+            : elapsedTime / Mathf.Max(0.05f, fighter.CurrentAttackDuration);
+
+        if (!windowOpened && attackProgress >= timing.activeStartNormalized)
+        {
+            fighter.EnableCurrentAttackHitboxes();
+            hitboxesEnabled = true;
+            windowOpened = true;
+        }
 
         // Desativa as hitboxes após a janela ativa do golpe (aos 0.50s)
-        if (elapsedTime >= 0.50f)
+        if (hitboxesEnabled && attackProgress >= timing.activeEndNormalized)
         {
             fighter.DisableAllHitboxes();
+            hitboxesEnabled = false;
         }
 
         // Retorna ao Neutro após o tempo total do ataque (ativação + recovery)
-        if (elapsedTime >= fighter.AttackDuration)
+        if (attackProgress >= timing.recoveryEndNormalized)
         {
             fighter.ChangeState(fighter.NeutralState);
         }
@@ -46,7 +63,11 @@ public class AttackState : IFighterState
     public void Exit(FighterController fighter)
     {
         elapsedTime = 0f;
+        hitboxesEnabled = false;
+        windowOpened = false;
         // Garante que nenhuma hitbox permaneça ativa após sair do ataque
         fighter.DisableAllHitboxes();
+        fighter.SetAttackRootMotion(false);
+        fighter.SetAnimatorSpeed(1f);
     }
 }

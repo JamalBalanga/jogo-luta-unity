@@ -24,16 +24,19 @@ public class NeutralState : IFighterState
     public void Update(FighterController fighter)
     {
         // Monitora entrada de ataque para transicionar
-        if (fighter.IsAttackTriggered())
+        FighterAttackType attack = fighter.ReadAttackCommand();
+        if (attack != FighterAttackType.None)
         {
-            fighter.ChangeState(fighter.AttackState);
+            fighter.TriggerAttack(attack);
             return;
         }
 
         // Alimenta o parâmetro Speed do Animator com a magnitude do movimento
         if (fighter.Animator != null && fighter.Movement != null)
         {
-            float speed = fighter.Movement.CurrentSpeedMagnitude;
+            float speed = fighter.Movement.CurrentMoveDirection > 0 && !fighter.Movement.IsCrouching
+                ? fighter.Movement.CurrentSpeedMagnitude
+                : 0f;
             fighter.Animator.SetFloat(SpeedHash, speed);
         }
     }
