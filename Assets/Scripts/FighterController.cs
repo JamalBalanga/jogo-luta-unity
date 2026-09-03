@@ -1,14 +1,16 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
 /// Controlador principal do lutador.
-/// Gerencia a Máquina de Estados Finitos (FSM), coordena a movimentação, animações,
-/// sistema de combate com Hitboxes/Hurtboxes e processa comandos via Unity Input System.
+/// Gerencia a Máquina de Estados Finitos (FSM), coordena movimentação, animações,
+/// sistema de combate com Hitboxes/Hurtboxes, Hitstop (frame freeze) e gestão de saúde.
 /// </summary>
 [RequireComponent(typeof(FighterMovement))]
+[RequireComponent(typeof(HealthSystem))]
 [DisallowMultipleComponent]
 public class FighterController : MonoBehaviour
 {
@@ -21,9 +23,6 @@ public class FighterController : MonoBehaviour
     [SerializeField] private Hitbox[] hitboxes;
 
     [Header("Combat Stats")]
-    [Tooltip("Saúde máxima do lutador.")]
-    [SerializeField, Min(1f)] private float maxHealth = 100f;
-
     [Tooltip("Dano padrão desferido por golpes básicos.")]
     [SerializeField, Min(0f)] private float defaultAttackDamage = 15f;
 
@@ -34,7 +33,10 @@ public class FighterController : MonoBehaviour
     [SerializeField, Min(0.05f)] private float attackDuration = 0.85f;
 
     [Tooltip("Duração padrão do congelamento por dano (Hit Stun) quando não especificado pelo golpe.")]
-    [SerializeField, Min(0.05f)] private float defaultHitStunDuration = 0.45f;
+    [SerializeField, Min(0.05f)] private float defaultHitStunDuration = 0.55f;
+
+    [Tooltip("Duração padrão do congelamento de quadros no impacto (Hitstop / Frame Freeze).")]
+    [SerializeField, Range(0.02f, 0.2f)] private float defaultHitstopDuration = 0.08f;
 
     [Header("Input Actions")]
     [Tooltip("Ação de ataque do novo Input System. Opcional: cria fallback automático se nulo.")]
@@ -44,15 +46,18 @@ public class FighterController : MonoBehaviour
     [SerializeField] private string neutralAnimName = "Idle";
     [SerializeField] private string attackAnimName = "Attack";
     [SerializeField] private string hitStunAnimName = "HitStun";
+    [SerializeField] private string knockoutAnimName = "Dying";
+    [SerializeField] private string turn180AnimName = "Turn180";
 
     [Header("Debug")]
     [SerializeField] private bool showOnScreenControls = true;
-    [SerializeField] private float currentHealth = 100f;
     [SerializeField] private string currentStateDebug;
 
-    // Componentes e ações em cache
+    // Componentes e referências em cache
     private FighterMovement movement;
+    private HealthSystem healthSystem;
     private InputAction runtimeAttackAction;
+    private Coroutine hitstopCoroutine;
     private readonly Dictionary<HitboxLimb, Hitbox> hitboxMap = new Dictionary<HitboxLimb, Hitbox>();
 
     // Edge-detection para inputs de hardware
@@ -66,27 +71,30 @@ public class FighterController : MonoBehaviour
     public int NeutralAnimHash { get; private set; }
     public int AttackAnimHash { get; private set; }
     public int HitStunAnimHash { get; private set; }
+    public int KnockoutAnimHash { get; private set; }
+    public int Turn180AnimHash { get; private set; }
 
     // Instâncias cacheadas dos estados FSM (Zero GC em transições)
     public NeutralState NeutralState { get; private set; }
     public AttackState AttackState { get; private set; }
     public HitStunState HitStunState { get; private set; }
+    public KnockoutState KnockoutState { get; private set; }
 
     // Estado ativo
     public IFighterState CurrentState { get; private set; }
 
     // Getters públicos
     public FighterMovement Movement => movement;
+    public HealthSystem HealthSystem => healthSystem;
     public Animator Animator => animator;
     public float AttackDuration => attackDuration;
     public float DefaultHitStunDuration => defaultHitStunDuration;
-    public float CurrentHealth => currentHealth;
-    public float MaxHealth => maxHealth;
+    public float DefaultHitstopDuration => defaultHitstopDuration;
 
     private void Awake()
     {
         movement = GetComponent<FighterMovement>();
-        currentHealth = maxHealth;
+        healthSystem = GetComponent<HealthSystem>();
 
         if (animator == null)
         {
@@ -97,34 +105,48 @@ public class FighterController : MonoBehaviour
             }
         }
 
-        // Cache de Hitboxes nos membros
         RefreshHitboxCache();
 
         NeutralAnimHash = Animator.StringToHash(neutralAnimName);
         AttackAnimHash = Animator.StringToHash(attackAnimName);
         HitStunAnimHash = Animator.StringToHash(hitStunAnimName);
+        KnockoutAnimHash = Animator.StringToHash(knockoutAnimName);
+        Turn180AnimHash = Animator.StringToHash(turn180AnimName);
 
         NeutralState = new NeutralState();
         AttackState = new AttackState();
         HitStunState = new HitStunState();
+        KnockoutState = new KnockoutState();
 
-        InitializeAttackInput();
+        if (movement != null && movement.IsPlayerControlled)
+        {
+            InitializeAttackInput();
+        }
     }
 
     private void OnEnable()
     {
-        if (attackActionReference != null && attackActionReference.action != null)
+        if (movement != null && movement.IsPlayerControlled)
         {
-            attackActionReference.action.actionMap?.Enable();
-            attackActionReference.action.Enable();
+            if (attackActionReference != null && attackActionReference.action != null)
+            {
+                attackActionReference.action.actionMap?.Enable();
+                attackActionReference.action.Enable();
+            }
+            runtimeAttackAction?.Enable();
         }
-        runtimeAttackAction?.Enable();
     }
 
     private void OnDisable()
     {
         runtimeAttackAction?.Disable();
         DisableAllHitboxes();
+
+        if (hitstopCoroutine != null)
+        {
+            StopCoroutine(hitstopCoroutine);
+            hitstopCoroutine = null;
+        }
     }
 
     private void OnDestroy()
@@ -145,9 +167,6 @@ public class FighterController : MonoBehaviour
         CurrentState?.Update(this);
     }
 
-    /// <summary>
-    /// Registra e indexa todas as hitboxes dos nós filhos por membro.
-    /// </summary>
     public void RefreshHitboxCache()
     {
         hitboxMap.Clear();
@@ -166,9 +185,6 @@ public class FighterController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Transiciona de forma segura entre estados da FSM.
-    /// </summary>
     public void ChangeState(IFighterState newState)
     {
         if (newState == null || CurrentState == newState) return;
@@ -189,20 +205,61 @@ public class FighterController : MonoBehaviour
 
     public void TriggerAttack()
     {
+        if (healthSystem != null && healthSystem.IsDead) return;
+
         if (CurrentState is NeutralState)
         {
             ChangeState(AttackState);
         }
     }
 
+    public void TriggerKnockout()
+    {
+        ChangeState(KnockoutState);
+    }
+
+    public void TriggerTurn180()
+    {
+        if (healthSystem != null && healthSystem.IsDead) return;
+
+        CrossFadeAnimation(Turn180AnimHash, 0.1f);
+    }
+
+    // ========================================================================
+    // HITSTOP (FRAME FREEZE FEEDBACK)
+    // ========================================================================
+
+    public void ApplyHitstop(float duration)
+    {
+        if (duration <= 0f || animator == null) return;
+
+        if (hitstopCoroutine != null)
+        {
+            StopCoroutine(hitstopCoroutine);
+        }
+
+        hitstopCoroutine = StartCoroutine(HitstopRoutine(duration));
+    }
+
+    private IEnumerator HitstopRoutine(float duration)
+    {
+        float previousSpeed = animator.speed;
+        animator.speed = 0f;
+
+        yield return new WaitForSecondsRealtime(duration);
+
+        if (animator != null)
+        {
+            animator.speed = previousSpeed > 0f ? previousSpeed : 1f;
+        }
+
+        hitstopCoroutine = null;
+    }
+
     // ========================================================================
     // MÉTODOS PÚBLICOS PARA ANIMATION EVENTS
     // ========================================================================
 
-    /// <summary>
-    /// Chamado por Animation Event para ativar a hitbox de um membro específico.
-    /// Aceita string compatível com o enum HitboxLimb (Ex: "RightHand", "LeftHand", "RightFoot").
-    /// </summary>
     public void EnableHitbox(string limbName)
     {
         if (Enum.TryParse(limbName, true, out HitboxLimb limb))
@@ -215,9 +272,6 @@ public class FighterController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Chamado por Animation Event para desativar a hitbox de um membro específico.
-    /// </summary>
     public void DisableHitbox(string limbName)
     {
         if (Enum.TryParse(limbName, true, out HitboxLimb limb))
@@ -226,19 +280,19 @@ public class FighterController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Ativa a hitbox de um membro com os valores padrão de dano deste lutador.
-    /// </summary>
     public void EnableHitbox(HitboxLimb limb)
     {
         Vector3 knockbackDir = transform.forward * defaultKnockbackForce;
-        DamageData defaultData = new DamageData(defaultAttackDamage, defaultHitStunDuration, knockbackDir, this);
+        DamageData defaultData = new DamageData(
+            defaultAttackDamage,
+            defaultHitStunDuration,
+            knockbackDir,
+            this,
+            defaultHitstopDuration
+        );
         EnableHitbox(limb, defaultData);
     }
 
-    /// <summary>
-    /// Ativa a hitbox de um membro fornecendo DamageData customizado.
-    /// </summary>
     public void EnableHitbox(HitboxLimb limb, DamageData data)
     {
         if (hitboxMap.TryGetValue(limb, out var hb))
@@ -247,9 +301,6 @@ public class FighterController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Desativa a hitbox do membro especificado.
-    /// </summary>
     public void DisableHitbox(HitboxLimb limb)
     {
         if (hitboxMap.TryGetValue(limb, out var hb))
@@ -258,9 +309,6 @@ public class FighterController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Desativa todas as hitboxes do personagem (chamado ao finalizar o ataque ou interromper por dano).
-    /// </summary>
     public void DisableAllHitboxes()
     {
         if (hitboxes == null) return;
@@ -277,30 +325,40 @@ public class FighterController : MonoBehaviour
     // PROCESSAMENTO DE DANO RECEBIDO VIA HURTBOX
     // ========================================================================
 
-    /// <summary>
-    /// Ponto de entrada oficial chamado pela Hurtbox quando uma Hitbox atinge este lutador.
-    /// </summary>
+    public void TakeDamage(DamageData data, Hitbox sourceHitbox)
+    {
+        ApplyDamage(data, sourceHitbox);
+    }
+
     public void ApplyDamage(DamageData data, Hitbox sourceHitbox)
     {
-        currentHealth = Mathf.Max(0f, currentHealth - data.damage);
+        float hitstopTime = data.hitstopDuration > 0f ? data.hitstopDuration : defaultHitstopDuration;
+        ApplyHitstop(hitstopTime);
 
-        // Aplica impulso de recuo (Knockback) através do CharacterController
+        if (data.attacker != null)
+        {
+            data.attacker.ApplyHitstop(hitstopTime);
+        }
+
+        if (healthSystem != null)
+        {
+            healthSystem.TakeDamage(data);
+        }
+
         if (movement != null && movement.CharacterController != null && data.knockback.sqrMagnitude > 0.01f)
         {
             Vector3 push = data.knockback * Time.deltaTime;
             movement.CharacterController.Move(push);
         }
 
-        // Força transição para HitStun
-        TakeHit(data.hitStunDuration);
+        if (healthSystem == null || !healthSystem.IsDead)
+        {
+            TakeHit(data.hitStunDuration);
+        }
     }
 
-    /// <summary>
-    /// Transiciona para o estado de congelamento por dano (HitStun).
-    /// </summary>
     public void TakeHit(float stunDuration = -1f)
     {
-        // Interrompe qualquer hitbox ativa ao tomar dano
         DisableAllHitboxes();
 
         if (stunDuration > 0f)
@@ -311,11 +369,11 @@ public class FighterController : MonoBehaviour
         ChangeState(HitStunState);
     }
 
-    /// <summary>
-    /// Verifica se a ação de ataque foi acionada (suporta Input Action, Teclado, Mouse e Gamepad).
-    /// </summary>
     public bool IsAttackTriggered()
     {
+        if (healthSystem != null && healthSystem.IsDead) return false;
+        if (movement != null && !movement.IsPlayerControlled) return false;
+
         if (Keyboard.current != null)
         {
             bool isSpace = Keyboard.current.spaceKey.isPressed;
@@ -395,29 +453,51 @@ public class FighterController : MonoBehaviour
         GUI.color = Color.white;
         var boxStyle = GUI.skin.box;
 
-        // 1. Painel de Status em Tempo Real
-        GUILayout.BeginArea(new Rect(15, 15, 360, 180), boxStyle);
-        GUILayout.Label("<b>CONTROLE & DIAGNÓSTICO DOS LUTADORES</b>");
-        
         var opponentController = movement.Opponent != null ? movement.Opponent.GetComponent<FighterController>() : null;
-        GUILayout.Label($"P1 Saúde: <b><color=lime>{currentHealth:F0}/{maxHealth}</color></b> | Estado: <b><color=yellow>{CurrentState?.GetType().Name}</color></b>");
-        GUILayout.Label($"P2 Saúde: <b><color=cyan>{(opponentController != null ? opponentController.CurrentHealth.ToString("F0") : "N/A")}/100</color></b> | Estado: <b><color=yellow>{(opponentController != null ? opponentController.CurrentState?.GetType().Name : "N/A")}</color></b>");
-        GUILayout.Label($"Input P1: X={movement.CurrentInput.x:F2}, Y={movement.CurrentInput.y:F2}");
-        GUILayout.Label($"Último Comando: <color=lime>{lastDetectedInput}</color>");
+        var opHealth = opponentController != null ? opponentController.HealthSystem : null;
+        var ai = movement.Opponent != null ? movement.Opponent.GetComponent<FighterSparringAI>() : null;
+
+        // 1. Painel de Status & Barra de Vida em Tempo Real
+        GUILayout.BeginArea(new Rect(15, 15, 390, 200), boxStyle);
+        GUILayout.Label("<b>PAINEL DE COMBATE & DIFICULDADE DA IA</b>");
+
+        float p1Hp = healthSystem != null ? healthSystem.CurrentHealth : 100f;
+        float p1Max = healthSystem != null ? healthSystem.MaxHealth : 100f;
+        string p1Status = healthSystem != null && healthSystem.IsDead ? "<color=red>K.O. (Dying)</color>" : $"{p1Hp:F0}/{p1Max:F0}";
+        GUILayout.Label($"P1 (Você - Blusa P/B): <b>{p1Status}</b> | Estado: <b><color=yellow>{CurrentState?.GetType().Name}</color></b>");
+
+        float p2Hp = opHealth != null ? opHealth.CurrentHealth : 100f;
+        float p2Max = opHealth != null ? opHealth.MaxHealth : 100f;
+        string p2Status = opHealth != null && opHealth.IsDead ? "<color=red>K.O. (Dying)</color>" : $"{p2Hp:F0}/{p2Max:F0}";
+        GUILayout.Label($"P2 (IA Oponente): <b>{p2Status}</b> | Estado: <b><color=yellow>{(opponentController != null ? opponentController.CurrentState?.GetType().Name : "N/A")}</color></b>");
+
+        string diffText = ai != null ? ai.Difficulty.ToString() : "N/A";
+        string diffColor = diffText == "Easy" ? "lime" : (diffText == "Medium" ? "yellow" : "red");
+        GUILayout.Label($"Dificuldade da IA: <b><color={diffColor}>{diffText}</color></b> | Hitstop: <b>{defaultHitstopDuration * 1000f:F0}ms</b>");
+        GUILayout.Label($"Orientação P1: <b>{(movement.IsFacingAway ? "De Costas (Recuando)" : "De Frente (Encarando)")}</b>");
         GUILayout.EndArea();
 
         // 2. Controles Virtuais Interativos
-        GUILayout.BeginArea(new Rect(15, 205, 360, 175), boxStyle);
-        GUILayout.Label("<b>TESTE RÁPIDO COM O MOUSE:</b>");
+        GUILayout.BeginArea(new Rect(15, 225, 390, 180), boxStyle);
+        GUILayout.Label("<b>CONTROLES & SELETOR DE DIFICULDADE:</b>");
 
+        // Movimento P1 (Frente, Trás, Órbita)
         GUILayout.BeginHorizontal();
-        if (GUILayout.RepeatButton("<< P1 Órbita (A)", GUILayout.Height(32)))
+        if (GUILayout.RepeatButton("<< A (Órbita)", GUILayout.Height(30)))
         {
             movement.ExternalInput = new Vector2(-1f, 0f);
         }
-        else if (GUILayout.RepeatButton("P1 Órbita (D) >>", GUILayout.Height(32)))
+        else if (GUILayout.RepeatButton("D (Órbita) >>", GUILayout.Height(30)))
         {
             movement.ExternalInput = new Vector2(1f, 0f);
+        }
+        else if (GUILayout.RepeatButton("▲ W (Avançar)", GUILayout.Height(30)))
+        {
+            movement.ExternalInput = new Vector2(0f, 1f);
+        }
+        else if (GUILayout.RepeatButton("▼ S (Recuar 180º)", GUILayout.Height(30)))
+        {
+            movement.ExternalInput = new Vector2(0f, -1f);
         }
         else
         {
@@ -427,13 +507,14 @@ public class FighterController : MonoBehaviour
 
         GUILayout.Space(4);
 
+        // Ações de Ataque
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("🥊 P1 SOCO", GUILayout.Height(34)))
+        if (GUILayout.Button("🥊 P1 SOCO (Espaço)", GUILayout.Height(32)))
         {
             TriggerAttack();
         }
 
-        if (opponentController != null && GUILayout.Button("💥 P2 SOCO", GUILayout.Height(34)))
+        if (opponentController != null && GUILayout.Button("💥 P2 SOCO (IA)", GUILayout.Height(32)))
         {
             opponentController.TriggerAttack();
         }
@@ -441,16 +522,45 @@ public class FighterController : MonoBehaviour
 
         GUILayout.Space(4);
 
-        var ai = movement.Opponent != null ? movement.Opponent.GetComponent<FighterSparringAI>() : null;
+        // Seletor de Dificuldade da IA e Reset
+        GUILayout.BeginHorizontal();
         if (ai != null)
         {
-            string aiText = ai.AutoSparring ? "🤖 IA de Treino P2: [LIGADA]" : "🤖 IA de Treino P2: [DESLIGADA]";
-            if (GUILayout.Button(aiText, GUILayout.Height(30)))
+            string btnDiff = $"🎯 Dificuldade: [{ai.Difficulty}]";
+            if (GUILayout.Button(btnDiff, GUILayout.Height(30)))
+            {
+                ai.CycleDifficulty();
+            }
+
+            string aiToggle = ai.AutoSparring ? "IA: [ON]" : "IA: [OFF]";
+            if (GUILayout.Button(aiToggle, GUILayout.Width(75), GUILayout.Height(30)))
             {
                 ai.AutoSparring = !ai.AutoSparring;
             }
         }
 
+        if (GUILayout.Button("🔄 REMATCH", GUILayout.Height(30)))
+        {
+            ResetMatch();
+        }
+        GUILayout.EndHorizontal();
+
         GUILayout.EndArea();
+    }
+
+    public void ResetMatch()
+    {
+        if (healthSystem != null) healthSystem.ResetHealth();
+        ChangeState(NeutralState);
+
+        if (movement != null && movement.Opponent != null)
+        {
+            var op = movement.Opponent.GetComponent<FighterController>();
+            if (op != null)
+            {
+                if (op.HealthSystem != null) op.HealthSystem.ResetHealth();
+                op.ChangeState(op.NeutralState);
+            }
+        }
     }
 }

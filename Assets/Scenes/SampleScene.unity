@@ -142,11 +142,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FighterMovement
   opponent: {fileID: 1691181804}
+  isPlayerControlled: 1
   forwardSpeed: 4.5
   backwardSpeed: 3.5
   sidestepSpeed: 4
   minDistanceToOpponent: 0.75
-  lockFacingOpponent: 1
   rotationSpeed: 1080
   gravity: -20
   groundedGravity: -2
@@ -197,17 +197,18 @@ MonoBehaviour:
   hitboxes:
   - {fileID: 1405613757}
   - {fileID: 1190913971}
-  maxHealth: 100
   defaultAttackDamage: 15
   defaultKnockbackForce: 4
   attackDuration: 1
   defaultHitStunDuration: 0.45
+  defaultHitstopDuration: 0.08
   attackActionReference: {fileID: 1897659072}
   neutralAnimName: Idle
   attackAnimName: Attack
   hitStunAnimName: HitStun
+  knockoutAnimName: Dying
+  turn180AnimName: Turn180
   showOnScreenControls: 1
-  currentHealth: 100
   currentStateDebug: 
 --- !u!54 &122608274
 Rigidbody:
@@ -236,6 +237,21 @@ Rigidbody:
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 0
+--- !u!114 &122608275
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 122608268}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e417fcb6488da6348883ba069d7b589f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HealthSystem
+  maxHealth: 100
+  currentHealth: 100
+  isDead: 0
 --- !u!1 &151114977
 GameObject:
   m_ObjectHideFlags: 0
@@ -445,7 +461,7 @@ PrefabInstance:
     - target: {fileID: 5866666021909216657, guid: 5b497f099b4caf84480947cfecca7cff, type: 3}
       propertyPath: m_Controller
       value: 
-      objectReference: {fileID: 9100000, guid: fc154ad9c263dad499ce051609f22b48, type: 2}
+      objectReference: {fileID: 9100000, guid: c05acf2b49361934a93e1055c9c1834c, type: 2}
     - target: {fileID: 5866666021909216657, guid: 5b497f099b4caf84480947cfecca7cff, type: 3}
       propertyPath: m_ApplyRootMotion
       value: 0
@@ -1092,6 +1108,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 22211d24f2634f54796dd6f710e438b5, type: 3}
       insertIndex: -1
       addedObject: {fileID: 122608274}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 22211d24f2634f54796dd6f710e438b5, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 122608275}
     - targetCorrespondingSourceObject: {fileID: 827075974287967996, guid: 22211d24f2634f54796dd6f710e438b5, type: 3}
       insertIndex: -1
       addedObject: {fileID: 2131894577}
@@ -1612,7 +1631,7 @@ PrefabInstance:
     - target: {fileID: 5866666021909216657, guid: c338f35fc52a9ed41b791913744960c4, type: 3}
       propertyPath: m_Controller
       value: 
-      objectReference: {fileID: 9100000, guid: fc154ad9c263dad499ce051609f22b48, type: 2}
+      objectReference: {fileID: 9100000, guid: c05acf2b49361934a93e1055c9c1834c, type: 2}
     - target: {fileID: 5866666021909216657, guid: c338f35fc52a9ed41b791913744960c4, type: 3}
       propertyPath: m_ApplyRootMotion
       value: 0
@@ -1838,7 +1857,7 @@ PrefabInstance:
     - target: {fileID: 5866666021909216657, guid: 9549fad929b2bf146a718b52cca4924a, type: 3}
       propertyPath: m_Controller
       value: 
-      objectReference: {fileID: 9100000, guid: fc154ad9c263dad499ce051609f22b48, type: 2}
+      objectReference: {fileID: 9100000, guid: c05acf2b49361934a93e1055c9c1834c, type: 2}
     - target: {fileID: 5866666021909216657, guid: 9549fad929b2bf146a718b52cca4924a, type: 3}
       propertyPath: m_ApplyRootMotion
       value: 0
@@ -2137,7 +2156,7 @@ PrefabInstance:
     - target: {fileID: 5866666021909216657, guid: 1420221422544e54cb15e5d51a46fcb2, type: 3}
       propertyPath: m_Controller
       value: 
-      objectReference: {fileID: 9100000, guid: fc154ad9c263dad499ce051609f22b48, type: 2}
+      objectReference: {fileID: 9100000, guid: c05acf2b49361934a93e1055c9c1834c, type: 2}
     - target: {fileID: 5866666021909216657, guid: 1420221422544e54cb15e5d51a46fcb2, type: 3}
       propertyPath: m_ApplyRootMotion
       value: 0
@@ -2557,6 +2576,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 3d0f75d81933dd34ea5a5b41af72688e, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1691181810}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 3d0f75d81933dd34ea5a5b41af72688e, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1691181811}
     - targetCorrespondingSourceObject: {fileID: 827075974287967996, guid: 3d0f75d81933dd34ea5a5b41af72688e, type: 3}
       insertIndex: -1
       addedObject: {fileID: 198672479}
@@ -2605,11 +2627,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FighterMovement
   opponent: {fileID: 122608269}
+  isPlayerControlled: 0
   forwardSpeed: 4.5
   backwardSpeed: 3.5
   sidestepSpeed: 4
   minDistanceToOpponent: 0.75
-  lockFacingOpponent: 1
   rotationSpeed: 1080
   gravity: -20
   groundedGravity: -2
@@ -2656,9 +2678,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 836437782b9b7f94b85b5ab1901ab669, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FighterSparringAI
+  difficulty: 1
   autoSparring: 1
-  actionInterval: 2
-  attackChance: 0.5
 --- !u!114 &1691181809
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2675,17 +2696,18 @@ MonoBehaviour:
   hitboxes:
   - {fileID: 2065466915}
   - {fileID: 151216832}
-  maxHealth: 100
   defaultAttackDamage: 15
   defaultKnockbackForce: 4
   attackDuration: 1
   defaultHitStunDuration: 0.45
+  defaultHitstopDuration: 0.08
   attackActionReference: {fileID: 0}
   neutralAnimName: Idle
   attackAnimName: Attack
   hitStunAnimName: HitStun
+  knockoutAnimName: Dying
+  turn180AnimName: Turn180
   showOnScreenControls: 0
-  currentHealth: 100
   currentStateDebug: 
 --- !u!54 &1691181810
 Rigidbody:
@@ -2714,6 +2736,21 @@ Rigidbody:
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 0
+--- !u!114 &1691181811
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1691181803}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e417fcb6488da6348883ba069d7b589f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HealthSystem
+  maxHealth: 100
+  currentHealth: 100
+  isDead: 0
 --- !u!1 &1692759841
 GameObject:
   m_ObjectHideFlags: 0
@@ -2971,7 +3008,7 @@ PrefabInstance:
     - target: {fileID: 5866666021909216657, guid: 0c959c1815b5fb445bbc3bb9447f5950, type: 3}
       propertyPath: m_Controller
       value: 
-      objectReference: {fileID: 9100000, guid: fc154ad9c263dad499ce051609f22b48, type: 2}
+      objectReference: {fileID: 9100000, guid: c05acf2b49361934a93e1055c9c1834c, type: 2}
     - target: {fileID: 5866666021909216657, guid: 0c959c1815b5fb445bbc3bb9447f5950, type: 3}
       propertyPath: m_ApplyRootMotion
       value: 0

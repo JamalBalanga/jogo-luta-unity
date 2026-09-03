@@ -1,39 +1,31 @@
 using UnityEngine;
 
 /// <summary>
-/// Estado de Hit Stun: Bloqueia totalmente ações e locomoção do lutador por uma janela de tempo fixa,
-/// disparando a animação de reação ao impacto (hurt/hit reaction).
+/// Estado de Reação a Golpe (HitStun).
+/// Congela ações e movimentação temporariamente e executa a animação "Hit To Body" do Mixamo.
 /// </summary>
 public class HitStunState : IFighterState
 {
+    private float stunDuration = 0.45f;
     private float elapsedTime;
-    private float currentStunDuration;
 
-    /// <summary>
-    /// Define uma duração dinâmica para o stun (útil para golpes leves vs pesados).
-    /// </summary>
     public void SetStunDuration(float duration)
     {
-        currentStunDuration = duration;
+        stunDuration = duration;
     }
 
     public void Enter(FighterController fighter)
     {
-        // Trava qualquer movimentação do personagem
+        // Trava movimentação e desativa hitboxes durante o atordoamento
         if (fighter.Movement != null)
         {
             fighter.Movement.CanMove = false;
         }
+        fighter.DisableAllHitboxes();
 
         elapsedTime = 0f;
 
-        // Se nenhuma duração específica foi configurada para o golpe recebido, usa o padrão do lutador
-        if (currentStunDuration <= 0f)
-        {
-            currentStunDuration = fighter.DefaultHitStunDuration;
-        }
-
-        // Dispara a animação de reação a dano
+        // Dispara a animação "Hit To Body"
         fighter.CrossFadeAnimation(fighter.HitStunAnimHash, 0.05f);
     }
 
@@ -41,8 +33,8 @@ public class HitStunState : IFighterState
     {
         elapsedTime += Time.deltaTime;
 
-        // Libera o personagem de volta ao Neutro após o fim do stun
-        if (elapsedTime >= currentStunDuration)
+        // Ao completar a janela de atordoamento, retorna ao Neutro
+        if (elapsedTime >= stunDuration)
         {
             fighter.ChangeState(fighter.NeutralState);
         }
@@ -51,6 +43,5 @@ public class HitStunState : IFighterState
     public void Exit(FighterController fighter)
     {
         elapsedTime = 0f;
-        currentStunDuration = 0f;
     }
 }

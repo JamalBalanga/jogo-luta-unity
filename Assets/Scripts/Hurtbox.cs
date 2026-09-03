@@ -2,7 +2,8 @@ using UnityEngine;
 
 /// <summary>
 /// Receptor de dano (Hurtbox). Anexado aos ossos do esqueleto do lutador.
-/// Possui um Collider Trigger e encaminha os impactos recebidos ao FighterController dono.
+/// Possui um Collider Trigger e encaminha os impactos recebidos ao FighterController dono
+/// acionando o método TakeDamage.
 /// </summary>
 [RequireComponent(typeof(Collider))]
 [DisallowMultipleComponent]
@@ -33,6 +34,7 @@ public class Hurtbox : MonoBehaviour
 
     /// <summary>
     /// Chamado pela Hitbox atacante ao colidir com esta Hurtbox.
+    /// Aciona o TakeDamage no FighterController dono com os dados do impacto.
     /// </summary>
     public void ReceiveHit(DamageData data, Hitbox sourceHitbox)
     {
@@ -41,7 +43,7 @@ public class Hurtbox : MonoBehaviour
         // Previne dano acidental contra si mesmo
         if (data.attacker == owner) return;
 
-        owner.ApplyDamage(data, sourceHitbox);
+        owner.TakeDamage(data, sourceHitbox);
     }
 
 #if UNITY_EDITOR

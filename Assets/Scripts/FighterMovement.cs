@@ -3,17 +3,20 @@ using UnityEngine.InputSystem;
 
 /// <summary>
 /// Controlador de movimentação 3D para jogos de luta estilo Tekken.
-/// Gerencia travamento de rotação horizontal em direção ao oponente,
-/// movimentação longitudinal (frente/trás) e órbita circular (sidestep)
-/// com conservação exata da distância radial usando CharacterController e o novo Input System.
+/// Gerencia locomoção longitudinal (frente/costas), órbita circular (sidestep)
+/// e executa a transição Walking Turn 180 automaticamente ao mudar a marcha entre frente e recuo.
 /// </summary>
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
 public class FighterMovement : MonoBehaviour
 {
     [Header("Opponent Target")]
-    [Tooltip("Transform do lutador oponente para travamento de câmera/mira e órbita.")]
+    [Tooltip("Transform do lutador oponente para travamento de combate e órbita.")]
     [SerializeField] private Transform opponent;
+
+    [Header("Control Settings")]
+    [Tooltip("Define se este lutador responde aos comandos físicos do teclado/gamepad do jogador (P1) ou apenas à IA (P2).")]
+    [SerializeField] private bool isPlayerControlled = true;
 
     [Header("Movement Velocities")]
     [Tooltip("Velocidade ao avançar em direção ao oponente.")]
@@ -29,63 +32,73 @@ public class FighterMovement : MonoBehaviour
     [SerializeField, Min(0.1f)] private float minDistanceToOpponent = 0.75f;
 
     [Header("Rotation")]
-    [Tooltip("Travar rotação horizontal sempre voltada para o oponente.")]
-    [SerializeField] private bool lockFacingOpponent = true;
-
-    [Tooltip("Velocidade de rotação horizontal em graus por segundo (valores altos = resposta instantânea estilo arcade).")]
+    [Tooltip("Velocidade de rotação horizontal em graus por segundo.")]
     [SerializeField, Min(0f)] private float rotationSpeed = 1080f;
 
     [Header("Physics & Gravity")]
     [Tooltip("Aceleração da gravidade aplicada no eixo Y.")]
     [SerializeField] private float gravity = -20f;
 
-    [Tooltip("Força constante para baixo ao estar no chão para manter estabilidade em rampas/degraus.")]
+    [Tooltip("Força constante para baixo ao estar no chão para manter estabilidade.")]
     [SerializeField] private float groundedGravity = -2f;
 
     [Header("Input System")]
-    [Tooltip("Ação de movimento (Vector2). Pode ser referenciada de um .inputactions ou configurada em runtime.")]
+    [Tooltip("Ação de movimento (Vector2).")]
     [SerializeField] private InputActionReference moveActionReference;
 
     // Componentes e referências em cache
     private CharacterController characterController;
+    private FighterController fighterController;
     private InputAction runtimeMoveAction;
     private float verticalVelocity;
 
-    // Propriedades públicas para acesso externo e flexibilidade
+    // Controle de orientação de marcha (frente vs costas com meia-volta)
+    private bool isFacingAway;
+    private float turn180Cooldown;
+
+    // Propriedades públicas
     public Transform Opponent
     {
         get => opponent;
         set => opponent = value;
     }
 
+    public bool IsPlayerControlled
+    {
+        get => isPlayerControlled;
+        set => isPlayerControlled = value;
+    }
+
     public bool CanMove { get; set; } = true;
-
     public bool IsGrounded => characterController != null && characterController.isGrounded;
-
     public CharacterController CharacterController => characterController;
-
     public Vector2 CurrentInput { get; private set; }
-
     public float CurrentSpeedMagnitude => CurrentInput.magnitude;
-
     public Vector2 ExternalInput { get; set; }
+    public bool IsFacingAway => isFacingAway;
 
     private void Awake()
     {
-        // Cache obrigatório para evitar overhead de GetComponent no ciclo de Update
         characterController = GetComponent<CharacterController>();
+        fighterController = GetComponent<FighterController>();
 
-        InitializeInput();
+        if (isPlayerControlled)
+        {
+            InitializeInput();
+        }
     }
 
     private void OnEnable()
     {
-        if (moveActionReference != null && moveActionReference.action != null)
+        if (isPlayerControlled)
         {
-            moveActionReference.action.actionMap?.Enable();
-            moveActionReference.action.Enable();
+            if (moveActionReference != null && moveActionReference.action != null)
+            {
+                moveActionReference.action.actionMap?.Enable();
+                moveActionReference.action.Enable();
+            }
+            runtimeMoveAction?.Enable();
         }
-        runtimeMoveAction?.Enable();
     }
 
     private void OnDisable()
@@ -95,7 +108,6 @@ public class FighterMovement : MonoBehaviour
 
     private void OnDestroy()
     {
-        // Limpeza de recursos alocados dinamicamente se a ação foi criada localmente
         if (moveActionReference == null && runtimeMoveAction != null)
         {
             runtimeMoveAction.Dispose();
@@ -104,24 +116,23 @@ public class FighterMovement : MonoBehaviour
 
     private void Update()
     {
-        // 1. Atualizar e travar a orientação para encarar o oponente
+        // 1. Processar entradas do jogador ou da IA
+        CurrentInput = ReadMovementInput();
+
+        // 2. Atualizar rotação com transição natural de 180 graus ao andar de costas
         UpdateFacing();
 
-        // 2. Processar entradas e calcular a translação
-        CurrentInput = ReadMovementInput();
+        // 3. Calcular translação horizontal (longitudinal e órbita)
         Vector3 horizontalMovement = CalculateHorizontalMovement(CurrentInput);
 
-        // 3. Processar física vertical (gravidade básica)
+        // 4. Processar gravidade básica
         Vector3 verticalMovement = CalculateVerticalMovement();
 
-        // 4. Aplicar deslocamento final através do CharacterController
+        // 5. Aplicar deslocamento final através do CharacterController
         Vector3 finalDisplacement = horizontalMovement + verticalMovement;
         characterController.Move(finalDisplacement);
     }
 
-    /// <summary>
-    /// Configura a ação do novo Unity Input System garantindo que o ActionMap seja ativado.
-    /// </summary>
     private void InitializeInput()
     {
         if (moveActionReference != null && moveActionReference.action != null)
@@ -132,14 +143,7 @@ public class FighterMovement : MonoBehaviour
         }
         else
         {
-            // Fallback elegante: cria dinamicamente uma ação 2D para funcionar out-of-the-box
-            runtimeMoveAction = new InputAction(
-                name: "Movement",
-                type: InputActionType.Value,
-                expectedControlType: "Vector2"
-            );
-
-            // Teclado (WASD / Setas)
+            runtimeMoveAction = new InputAction(name: "Movement", type: InputActionType.Value, expectedControlType: "Vector2");
             runtimeMoveAction.AddCompositeBinding("2DVector")
                 .With("Up", "<Keyboard>/w")
                 .With("Down", "<Keyboard>/s")
@@ -152,30 +156,34 @@ public class FighterMovement : MonoBehaviour
                 .With("Left", "<Keyboard>/leftArrow")
                 .With("Right", "<Keyboard>/rightArrow");
 
-            // Gamepad (Analógico esquerdo e D-Pad)
             runtimeMoveAction.AddBinding("<Gamepad>/leftStick");
             runtimeMoveAction.AddBinding("<Gamepad>/dpad");
-
             runtimeMoveAction.Enable();
         }
     }
 
     /// <summary>
-    /// Lê o vetor de entrada normalizado com suporte a ExternalInput, polling direto e InputActions.
+    /// Lê a entrada de movimento. Se isPlayerControlled for falso, NUNCA lê o teclado (exclusivo para IA).
     /// </summary>
     private Vector2 ReadMovementInput()
     {
         if (!CanMove) return Vector2.zero;
 
-        // 1. Entrada forçada via botões da UI / OnGUI na tela
+        // Se houver comando vindo da IA (ExternalInput), tem prioridade absoluta
         if (ExternalInput.sqrMagnitude > 0.001f)
         {
             return ExternalInput;
         }
 
+        // Se NÃO for o personagem controlado pelo jogador, nunca escuta o teclado
+        if (!isPlayerControlled)
+        {
+            return Vector2.zero;
+        }
+
         Vector2 input = Vector2.zero;
 
-        // 2. Polling direto do teclado físico via Input System
+        // 1. Polling prioritário do teclado físico do jogador
         if (Keyboard.current != null)
         {
             float x = 0f;
@@ -189,13 +197,12 @@ public class FighterMovement : MonoBehaviour
             input = new Vector2(x, y);
         }
 
-        // 3. Se o teclado físico não foi pressionado, lê da InputAction (Gamepad / Stick analógico)
+        // 2. Fallback via InputAction (Gamepad)
         if (input.sqrMagnitude < 0.001f && runtimeMoveAction != null && runtimeMoveAction.enabled)
         {
             input = runtimeMoveAction.ReadValue<Vector2>();
         }
 
-        // Clampeamento para garantir que diagonais analógicas não excedam magnitude 1
         if (input.sqrMagnitude > 1f)
         {
             input.Normalize();
@@ -205,37 +212,56 @@ public class FighterMovement : MonoBehaviour
     }
 
     /// <summary>
-    /// Mantém a rotação travada horizontalmente no oponente (ignorando a diferença de altura no eixo Y).
+    /// Mantém o lutador voltado para o oponente, executando Walking Turn 180 automaticamente
+    /// ao recuar de costas e ao virar novamente de frente.
     /// </summary>
     private void UpdateFacing()
     {
-        if (!lockFacingOpponent || opponent == null) return;
+        if (opponent == null) return;
 
         Vector3 toOpponent = opponent.position - transform.position;
-        toOpponent.y = 0f; // Look-at relativo estritamente no plano horizontal (XZ)
+        toOpponent.y = 0f;
 
-        if (toOpponent.sqrMagnitude > 0.0001f)
+        if (toOpponent.sqrMagnitude < 0.0001f) return;
+
+        // Transição 180º Automática:
+        // Ao recuar para trás (input.y < -0.15f): gira 180º de costas para o oponente e continua andando
+        if (CurrentInput.y < -0.15f && !isFacingAway && Time.time > turn180Cooldown)
         {
-            Quaternion targetRotation = Quaternion.LookRotation(toOpponent);
+            isFacingAway = true;
+            turn180Cooldown = Time.time + 0.65f;
+            if (fighterController == null) fighterController = GetComponent<FighterController>();
+            fighterController?.CrossFadeAnimation(fighterController.Turn180AnimHash, 0.1f);
+        }
+        // Ao avançar para a frente (input.y > 0.15f): gira 180º de volta de frente para o oponente e continua andando
+        else if (CurrentInput.y > 0.15f && isFacingAway && Time.time > turn180Cooldown)
+        {
+            isFacingAway = false;
+            turn180Cooldown = Time.time + 0.65f;
+            if (fighterController == null) fighterController = GetComponent<FighterController>();
+            fighterController?.CrossFadeAnimation(fighterController.Turn180AnimHash, 0.1f);
+        }
 
-            if (rotationSpeed <= 0f)
-            {
-                transform.rotation = targetRotation;
-            }
-            else
-            {
-                transform.rotation = Quaternion.RotateTowards(
-                    transform.rotation,
-                    targetRotation,
-                    rotationSpeed * Time.deltaTime
-                );
-            }
+        // Se estiver de costas, orienta na direção oposta ao oponente (-toOpponent); senão, encara o oponente (toOpponent)
+        Vector3 targetDirection = isFacingAway ? -toOpponent : toOpponent;
+        Quaternion targetRotation = Quaternion.LookRotation(targetDirection);
+
+        if (rotationSpeed <= 0f)
+        {
+            transform.rotation = targetRotation;
+        }
+        else
+        {
+            transform.rotation = Quaternion.RotateTowards(
+                transform.rotation,
+                targetRotation,
+                rotationSpeed * Time.deltaTime
+            );
         }
     }
 
     /// <summary>
-    /// Calcula o deslocamento horizontal combinando movimento longitudinal (frente/trás)
-    /// com órbita circular (sidestep) para evitar qualquer descalibração de distância.
+    /// Calcula a translação horizontal longitudinal e orbital ao redor do oponente.
     /// </summary>
     private Vector3 CalculateHorizontalMovement(Vector2 input)
     {
@@ -243,38 +269,44 @@ public class FighterMovement : MonoBehaviour
 
         float dt = Time.deltaTime;
 
-        // Se não houver oponente definido, utiliza translação linear clássica
         if (opponent == null)
         {
             float fallbackSpeed = input.y >= 0f ? forwardSpeed : backwardSpeed;
-            Vector3 linearMove = (transform.forward * (input.y * fallbackSpeed) +
-                                  transform.right * (input.x * sidestepSpeed)) * dt;
-            return linearMove;
+            return (transform.forward * (input.y * fallbackSpeed) + transform.right * (input.x * sidestepSpeed)) * dt;
         }
 
-        // --- 1. Movimento Longitudinal (Frente / Trás ao longo de transform.forward) ---
-        float speedAlongForward = input.y >= 0f ? forwardSpeed : backwardSpeed;
-        Vector3 forwardDisplacement = transform.forward * (input.y * speedAlongForward * dt);
+        // 1. Movimento Longitudinal (Frente / Recuo)
+        Vector3 longitudinalDisplacement = Vector3.zero;
 
-        // Prevenção de penetração frontal se estiver abaixo da distância mínima
-        if (input.y > 0f)
+        if (Mathf.Abs(input.y) > 0.001f)
         {
             Vector3 toOpponent = opponent.position - transform.position;
             toOpponent.y = 0f;
-            float currentDist = toOpponent.magnitude;
+            Vector3 forwardDir = toOpponent.normalized;
 
-            if (currentDist <= minDistanceToOpponent)
+            if (input.y > 0f)
             {
-                forwardDisplacement = Vector3.zero;
+                // Avançando em direção ao oponente
+                float currentDist = toOpponent.magnitude;
+                float moveStep = forwardSpeed * input.y * dt;
+
+                if (currentDist - moveStep > minDistanceToOpponent)
+                {
+                    longitudinalDisplacement = forwardDir * moveStep;
+                }
+                else if (currentDist > minDistanceToOpponent)
+                {
+                    longitudinalDisplacement = forwardDir * (currentDist - minDistanceToOpponent);
+                }
             }
-            else if (currentDist - forwardDisplacement.magnitude < minDistanceToOpponent)
+            else
             {
-                // Limita o passo para parar exatamente na distância mínima
-                forwardDisplacement = transform.forward * (currentDist - minDistanceToOpponent);
+                // Recuando para longe do oponente
+                longitudinalDisplacement = -forwardDir * (backwardSpeed * Mathf.Abs(input.y) * dt);
             }
         }
 
-        // --- 2. Movimento Lateral Orbital (Sidestep ao redor do oponente) ---
+        // 2. Movimento Lateral Orbital (Sidestep ao redor do oponente com raio fixo)
         Vector3 orbitalDisplacement = Vector3.zero;
 
         if (Mathf.Abs(input.x) > 0.001f)
@@ -299,12 +331,9 @@ public class FighterMovement : MonoBehaviour
             }
         }
 
-        return forwardDisplacement + orbitalDisplacement;
+        return longitudinalDisplacement + orbitalDisplacement;
     }
 
-    /// <summary>
-    /// Gerencia a gravidade básica com grounding estável para o CharacterController.
-    /// </summary>
     private Vector3 CalculateVerticalMovement()
     {
         if (characterController.isGrounded && verticalVelocity < 0f)
@@ -318,24 +347,4 @@ public class FighterMovement : MonoBehaviour
 
         return Vector3.up * (verticalVelocity * Time.deltaTime);
     }
-
-#if UNITY_EDITOR
-    private void OnDrawGizmosSelected()
-    {
-        if (opponent == null) return;
-
-        Vector3 flatPlayerPos = transform.position;
-        Vector3 flatOpponentPos = new Vector3(opponent.position.x, transform.position.y, opponent.position.z);
-
-        Gizmos.color = Color.cyan;
-        Gizmos.DrawLine(flatPlayerPos, flatOpponentPos);
-
-        float radius = Vector3.Distance(flatPlayerPos, flatOpponentPos);
-        Gizmos.color = new Color(0f, 1f, 0.5f, 0.35f);
-        Gizmos.DrawWireSphere(flatOpponentPos, radius);
-
-        Gizmos.color = new Color(1f, 0.2f, 0.2f, 0.4f);
-        Gizmos.DrawWireSphere(flatOpponentPos, minDistanceToOpponent);
-    }
-#endif
 }
