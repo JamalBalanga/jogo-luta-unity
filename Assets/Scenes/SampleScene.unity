@@ -147,6 +147,7 @@ MonoBehaviour:
   backwardSpeed: 3.5
   sidestepSpeed: 4
   minDistanceToOpponent: 0.75
+  lockFacingOpponent: 1
   rotationSpeed: 1080
   gravity: -20
   groundedGravity: -2
@@ -207,6 +208,7 @@ MonoBehaviour:
   attackAnimName: Attack
   hitStunAnimName: HitStun
   knockoutAnimName: Dying
+  standingUpAnimName: StandingUp
   turn180AnimName: Turn180
   showOnScreenControls: 1
   currentStateDebug: 
@@ -690,17 +692,20 @@ MonoBehaviour:
   m_GameObject: {fileID: 330585543}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7fdf2da268b192d43ac1d462870e52be, type: 3}
+  m_Script: {fileID: 11500000, guid: 787523c8fb6e5a74d87180fc9526410f, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::TekkenCamera
+  m_EditorClassIdentifier: Assembly-CSharp::FightCameraController
   fighter1: {fileID: 122608269}
   fighter2: {fileID: 1691181804}
-  baseDistance: 5
+  baseDistance: 5.2
+  minDistance: 3.8
+  maxDistance: 9
+  zoomFactor: 0.65
   height: 1.6
-  lookAtHeight: 1.1
-  zoomFactor: 0.6
-  followDamping: 8
-  rotationDamping: 10
+  lookAtHeightOffset: 1.15
+  invertSide: 0
+  positionSmoothTime: 0.12
+  rotationSpeed: 9
 --- !u!21 &364024541
 Material:
   serializedVersion: 8
@@ -2632,6 +2637,7 @@ MonoBehaviour:
   backwardSpeed: 3.5
   sidestepSpeed: 4
   minDistanceToOpponent: 0.75
+  lockFacingOpponent: 1
   rotationSpeed: 1080
   gravity: -20
   groundedGravity: -2
@@ -2706,6 +2712,7 @@ MonoBehaviour:
   attackAnimName: Attack
   hitStunAnimName: HitStun
   knockoutAnimName: Dying
+  standingUpAnimName: StandingUp
   turn180AnimName: Turn180
   showOnScreenControls: 0
   currentStateDebug: 

@@ -1,23 +1,25 @@
 using UnityEngine;
 
 /// <summary>
-/// Estado Neutro: Permite movimentação 3D livre via FighterMovement e escuta inputs de ataque.
-/// Transiciona para AttackState ao receber o comando de ataque.
-/// Atualiza o parâmetro 'Speed' do Animator para transicionar entre Idle e Run.
+/// Estado Neutro da FSM do lutador.
+/// Permite livre locomoção 3D (longitudinal e órbita circular), alimenta parâmetros
+/// de movimentação (Speed, ForwardInput, RightInput) no Animator e escuta comandos de ataque.
 /// </summary>
 public class NeutralState : IFighterState
 {
     private static readonly int SpeedHash = Animator.StringToHash("Speed");
+    private static readonly int ForwardInputHash = Animator.StringToHash("ForwardInput");
+    private static readonly int RightInputHash = Animator.StringToHash("RightInput");
 
     public void Enter(FighterController fighter)
     {
-        // Garante que o movimento 3D está habilitado
+        // Garante que a movimentação 3D está habilitada
         if (fighter.Movement != null)
         {
             fighter.Movement.CanMove = true;
         }
 
-        // Toca animação neutra (Idle/Locomoção)
+        // Toca animação neutra (Idle / Guarda de combate)
         fighter.CrossFadeAnimation(fighter.NeutralAnimHash, 0.1f);
     }
 
@@ -30,20 +32,17 @@ public class NeutralState : IFighterState
             return;
         }
 
-        // Alimenta o parâmetro Speed do Animator com a magnitude do movimento
+        // Alimenta os parâmetros de locomoção no Animator sem causar rotação de raiz
         if (fighter.Animator != null && fighter.Movement != null)
         {
-            float speed = fighter.Movement.CurrentSpeedMagnitude;
-            fighter.Animator.SetFloat(SpeedHash, speed);
+            fighter.Animator.SetFloat(SpeedHash, fighter.Movement.CurrentSpeedMagnitude);
+            fighter.Animator.SetFloat(ForwardInputHash, fighter.Movement.ForwardInput);
+            fighter.Animator.SetFloat(RightInputHash, fighter.Movement.RightInput);
         }
     }
 
     public void Exit(FighterController fighter)
     {
-        // Zera o Speed ao sair para outros estados (Ataque / HitStun)
-        if (fighter.Animator != null)
-        {
-            fighter.Animator.SetFloat(SpeedHash, 0f);
-        }
+        // Limpeza de parâmetros ao sair do estado Neutro
     }
 }

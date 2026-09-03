@@ -7,7 +7,8 @@ using UnityEngine.InputSystem;
 /// <summary>
 /// Controlador principal do lutador.
 /// Gerencia a Máquina de Estados Finitos (FSM), coordena movimentação, animações,
-/// sistema de combate com Hitboxes/Hurtboxes, Hitstop (frame freeze) e gestão de saúde.
+/// sistema de combate com Hitboxes/Hurtboxes, Hitstop (frame freeze), gestão de saúde
+/// e animação Standing Up ao solicitar rematch / reinício de combate.
 /// </summary>
 [RequireComponent(typeof(FighterMovement))]
 [RequireComponent(typeof(HealthSystem))]
@@ -47,6 +48,7 @@ public class FighterController : MonoBehaviour
     [SerializeField] private string attackAnimName = "Attack";
     [SerializeField] private string hitStunAnimName = "HitStun";
     [SerializeField] private string knockoutAnimName = "Dying";
+    [SerializeField] private string standingUpAnimName = "StandingUp";
     [SerializeField] private string turn180AnimName = "Turn180";
 
     [Header("Debug")]
@@ -58,6 +60,7 @@ public class FighterController : MonoBehaviour
     private HealthSystem healthSystem;
     private InputAction runtimeAttackAction;
     private Coroutine hitstopCoroutine;
+    private Coroutine standingUpCoroutine;
     private readonly Dictionary<HitboxLimb, Hitbox> hitboxMap = new Dictionary<HitboxLimb, Hitbox>();
 
     // Edge-detection para inputs de hardware
@@ -72,6 +75,7 @@ public class FighterController : MonoBehaviour
     public int AttackAnimHash { get; private set; }
     public int HitStunAnimHash { get; private set; }
     public int KnockoutAnimHash { get; private set; }
+    public int StandingUpAnimHash { get; private set; }
     public int Turn180AnimHash { get; private set; }
 
     // Instâncias cacheadas dos estados FSM (Zero GC em transições)
@@ -111,6 +115,7 @@ public class FighterController : MonoBehaviour
         AttackAnimHash = Animator.StringToHash(attackAnimName);
         HitStunAnimHash = Animator.StringToHash(hitStunAnimName);
         KnockoutAnimHash = Animator.StringToHash(knockoutAnimName);
+        StandingUpAnimHash = Animator.StringToHash(standingUpAnimName);
         Turn180AnimHash = Animator.StringToHash(turn180AnimName);
 
         NeutralState = new NeutralState();
@@ -146,6 +151,12 @@ public class FighterController : MonoBehaviour
         {
             StopCoroutine(hitstopCoroutine);
             hitstopCoroutine = null;
+        }
+
+        if (standingUpCoroutine != null)
+        {
+            StopCoroutine(standingUpCoroutine);
+            standingUpCoroutine = null;
         }
     }
 
@@ -223,6 +234,46 @@ public class FighterController : MonoBehaviour
         if (healthSystem != null && healthSystem.IsDead) return;
 
         CrossFadeAnimation(Turn180AnimHash, 0.1f);
+    }
+
+    // ========================================================================
+    // STANDING UP (LEVANTO DO CHÃO APÓS NOCAUTE / REMATCH)
+    // ========================================================================
+
+    /// <summary>
+    /// Aciona a animação de levantar do chão (Standing Up) e reabilita o lutador para o combate.
+    /// </summary>
+    public void TriggerStandingUp(Action onComplete = null)
+    {
+        if (standingUpCoroutine != null)
+        {
+            StopCoroutine(standingUpCoroutine);
+        }
+
+        standingUpCoroutine = StartCoroutine(StandingUpRoutine(onComplete));
+    }
+
+    private IEnumerator StandingUpRoutine(Action onComplete)
+    {
+        // 1. Trava movimentação e desativa hitboxes enquanto levanta
+        if (movement != null) movement.CanMove = false;
+        DisableAllHitboxes();
+
+        // 2. Restaura vida e flags
+        if (healthSystem != null) healthSystem.ResetHealth();
+
+        // 3. Dispara animação "Standing Up"
+        CrossFadeAnimation(StandingUpAnimHash, 0.1f);
+
+        // 4. Aguarda a conclusão da animação (aproximadamente 6.0 segundos a 1.75x)
+        yield return new WaitForSeconds(6.0f);
+
+        // 5. Restaura movimentação e retorna para estado Neutro (Idle)
+        if (movement != null) movement.CanMove = true;
+        ChangeState(NeutralState);
+
+        standingUpCoroutine = null;
+        onComplete?.Invoke();
     }
 
     // ========================================================================
@@ -463,18 +514,18 @@ public class FighterController : MonoBehaviour
 
         float p1Hp = healthSystem != null ? healthSystem.CurrentHealth : 100f;
         float p1Max = healthSystem != null ? healthSystem.MaxHealth : 100f;
-        string p1Status = healthSystem != null && healthSystem.IsDead ? "<color=red>K.O. (Dying)</color>" : $"{p1Hp:F0}/{p1Max:F0}";
+        string p1Status = healthSystem != null && healthSystem.IsDead ? "<color=red>K.O. (No Chão)</color>" : $"{p1Hp:F0}/{p1Max:F0}";
         GUILayout.Label($"P1 (Você - Blusa P/B): <b>{p1Status}</b> | Estado: <b><color=yellow>{CurrentState?.GetType().Name}</color></b>");
 
         float p2Hp = opHealth != null ? opHealth.CurrentHealth : 100f;
         float p2Max = opHealth != null ? opHealth.MaxHealth : 100f;
-        string p2Status = opHealth != null && opHealth.IsDead ? "<color=red>K.O. (Dying)</color>" : $"{p2Hp:F0}/{p2Max:F0}";
+        string p2Status = opHealth != null && opHealth.IsDead ? "<color=red>K.O. (No Chão)</color>" : $"{p2Hp:F0}/{p2Max:F0}";
         GUILayout.Label($"P2 (IA Oponente): <b>{p2Status}</b> | Estado: <b><color=yellow>{(opponentController != null ? opponentController.CurrentState?.GetType().Name : "N/A")}</color></b>");
 
         string diffText = ai != null ? ai.Difficulty.ToString() : "N/A";
         string diffColor = diffText == "Easy" ? "lime" : (diffText == "Medium" ? "yellow" : "red");
         GUILayout.Label($"Dificuldade da IA: <b><color={diffColor}>{diffText}</color></b> | Hitstop: <b>{defaultHitstopDuration * 1000f:F0}ms</b>");
-        GUILayout.Label($"Orientação P1: <b>{(movement.IsFacingAway ? "De Costas (Recuando)" : "De Frente (Encarando)")}</b>");
+        GUILayout.Label($"Inputs P1: <b>Forward={movement.ForwardInput:F1}, Right={movement.RightInput:F1}</b>");
         GUILayout.EndArea();
 
         // 2. Controles Virtuais Interativos
@@ -495,7 +546,7 @@ public class FighterController : MonoBehaviour
         {
             movement.ExternalInput = new Vector2(0f, 1f);
         }
-        else if (GUILayout.RepeatButton("▼ S (Recuar 180º)", GUILayout.Height(30)))
+        else if (GUILayout.RepeatButton("▼ S (Recuar)", GUILayout.Height(30)))
         {
             movement.ExternalInput = new Vector2(0f, -1f);
         }
@@ -522,7 +573,7 @@ public class FighterController : MonoBehaviour
 
         GUILayout.Space(4);
 
-        // Seletor de Dificuldade da IA e Reset
+        // Seletor de Dificuldade da IA e Reset com Standing Up
         GUILayout.BeginHorizontal();
         if (ai != null)
         {
@@ -539,7 +590,8 @@ public class FighterController : MonoBehaviour
             }
         }
 
-        if (GUILayout.Button("🔄 REMATCH", GUILayout.Height(30)))
+        // Botão Rematch que aciona Standing Up!
+        if (GUILayout.Button("🔄 REMATCH (Levantar)", GUILayout.Height(30)))
         {
             ResetMatch();
         }
@@ -548,15 +600,34 @@ public class FighterController : MonoBehaviour
         GUILayout.EndArea();
     }
 
+    /// <summary>
+    /// Reinicia a partida acionando a animação Standing Up para quem estiver no chão.
+    /// </summary>
     public void ResetMatch()
     {
-        if (healthSystem != null) healthSystem.ResetHealth();
-        ChangeState(NeutralState);
+        bool p1WasDead = healthSystem != null && healthSystem.IsDead;
+        var op = movement != null && movement.Opponent != null ? movement.Opponent.GetComponent<FighterController>() : null;
+        bool p2WasDead = op != null && op.HealthSystem != null && op.HealthSystem.IsDead;
 
-        if (movement != null && movement.Opponent != null)
+        // Se alguém caiu no chão, aquele que caiu levanta com Standing Up
+        // Se nenhum caiu (reset manual), ambos executam o levante para recomeçar o round
+        if (p1WasDead || (!p1WasDead && !p2WasDead))
         {
-            var op = movement.Opponent.GetComponent<FighterController>();
-            if (op != null)
+            TriggerStandingUp();
+        }
+        else
+        {
+            if (healthSystem != null) healthSystem.ResetHealth();
+            ChangeState(NeutralState);
+        }
+
+        if (op != null)
+        {
+            if (p2WasDead || (!p1WasDead && !p2WasDead))
+            {
+                op.TriggerStandingUp();
+            }
+            else
             {
                 if (op.HealthSystem != null) op.HealthSystem.ResetHealth();
                 op.ChangeState(op.NeutralState);
