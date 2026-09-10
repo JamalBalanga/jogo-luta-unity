@@ -15,8 +15,8 @@ public enum FighterAttackType
 // Each prefab owns independent animation timing and playback tuning.
 public sealed class FighterAttackTiming
 {
-    [Range(0f, 1f)] public float activeStartNormalized = 0.35f;
-    [Range(0f, 1f)] public float activeEndNormalized = 0.5f;
+    [Range(0f, 1f)] public float activeStartNormalized = 0.58f;
+    [Range(0f, 1f)] public float activeEndNormalized = 0.64f;
     [Range(0.1f, 1.25f)] public float recoveryEndNormalized = 0.98f;
     [Min(0.1f)] public float playbackSpeed = 1f;
     public HitboxLimb hitboxLimb = HitboxLimb.RightHand;
@@ -58,8 +58,8 @@ public class FighterController : MonoBehaviour
     [SerializeField] private FighterAttackTiming primaryAttackTiming = new FighterAttackTiming();
     [SerializeField] private FighterAttackTiming secondaryAttackTiming = new FighterAttackTiming
     {
-        activeStartNormalized = 0.45f,
-        activeEndNormalized = 0.58f,
+        activeStartNormalized = 0.54f,
+        activeEndNormalized = 0.61f,
         recoveryEndNormalized = 0.98f,
         hitboxLimb = HitboxLimb.RightFoot
     };
@@ -96,10 +96,7 @@ public class FighterController : MonoBehaviour
 
     // Edge-detection para inputs de hardware
     private bool wasSpaceHeld;
-    private bool wasJHeld;
     private bool wasKHeld;
-    private bool wasEnterHeld;
-    private bool wasMouseHeld;
     private string lastDetectedInput = "Nenhum";
 
     // Hashes numéricos de animação
@@ -141,6 +138,26 @@ public class FighterController : MonoBehaviour
     public FighterAttackType ActiveAttackType { get; private set; } = FighterAttackType.Punch;
     public float DefaultHitStunDuration => defaultHitStunDuration;
     public float DefaultHitstopDuration => defaultHitstopDuration;
+    public bool IsGuarding { get; private set; }
+
+    public void ConfigureCombat(float primaryDamage, float secondaryDamage, float knockback)
+    {
+        defaultAttackDamage = Mathf.Max(0f, primaryDamage);
+        secondaryAttackDamage = Mathf.Max(0f, secondaryDamage);
+        defaultKnockbackForce = Mathf.Max(0f, knockback);
+    }
+
+    public void SetDebugControlsVisible(bool visible) => showOnScreenControls = visible;
+
+    public void SetGuarding(bool guarding)
+    {
+        IsGuarding = guarding && CurrentState is NeutralState && healthSystem != null && !healthSystem.IsDead;
+    }
+
+    public bool ReadGuardCommand()
+    {
+        return movement != null && movement.IsPlayerControlled && Keyboard.current != null && Keyboard.current.leftShiftKey.isPressed;
+    }
 
     private void Awake()
     {
@@ -154,6 +171,18 @@ public class FighterController : MonoBehaviour
             {
                 animator = GetComponentInChildren<Animator>();
             }
+        }
+
+        // Prefabs de personagem nao carregam um controller proprio. Sem esta
+        // base, o rig exibe a bind pose de corrida. A luta sempre inicia no
+        // Idle de combate compartilhado e os golpes sao estados desse mesmo
+        // controller.
+        if (animator != null)
+        {
+            RuntimeAnimatorController foundation = Resources.Load<RuntimeAnimatorController>("Animations/FighterFoundation");
+            if (foundation != null) animator.runtimeAnimatorController = foundation;
+            animator.applyRootMotion = false;
+            animator.enabled = true;
         }
 
         RefreshHitboxCache();
@@ -224,7 +253,10 @@ public class FighterController : MonoBehaviour
 
     public void SetAttackRootMotion(bool enabled)
     {
-        if (animator != null) animator.applyRootMotion = enabled;
+        // A base Bouncing Fight Idle é somente visual. A posição física continua
+        // exclusivamente sob FighterMovement, inclusive durante socos e chutes.
+        ProceduralFighterAnimation procedural = GetComponent<ProceduralFighterAnimation>();
+        if (animator != null) animator.applyRootMotion = (procedural == null || !procedural.enabled) && enabled;
     }
 
     public void SetAnimatorSpeed(float speed)
@@ -290,6 +322,8 @@ public class FighterController : MonoBehaviour
 
         if (CurrentState is NeutralState)
         {
+            IsGuarding = false;
+            movement?.FaceOpponentNow();
             ActiveAttackType = attackType == FighterAttackType.Attack2
                 ? FighterAttackType.Attack2
                 : FighterAttackType.Punch;
@@ -444,6 +478,12 @@ public class FighterController : MonoBehaviour
 
     public void ApplyDamage(DamageData data, Hitbox sourceHitbox)
     {
+        if (IsGuarding && CurrentState is NeutralState)
+        {
+            data.damage *= .28f;
+            data.hitStunDuration *= .35f;
+            data.knockback *= .32f;
+        }
         float hitstopTime = data.hitstopDuration > 0f ? data.hitstopDuration : defaultHitstopDuration;
         ApplyHitstop(hitstopTime);
 
@@ -485,38 +525,22 @@ public class FighterController : MonoBehaviour
         if (Keyboard.current != null)
         {
             bool isSpace = Keyboard.current.spaceKey.isPressed;
-            bool isJ = Keyboard.current.jKey.isPressed;
-            bool isK = Keyboard.current.kKey.isPressed;
-            bool isEnter = Keyboard.current.enterKey.isPressed;
-            bool punchTriggered = (isSpace && !wasSpaceHeld) || (isJ && !wasJHeld) || (isEnter && !wasEnterHeld);
-            bool attack2Triggered = isK && !wasKHeld;
+            bool isLeftCtrl = Keyboard.current.leftCtrlKey.isPressed;
+            bool punchTriggered = isSpace && !wasSpaceHeld;
+            bool attack2Triggered = isLeftCtrl && !wasKHeld;
 
             wasSpaceHeld = isSpace;
-            wasJHeld = isJ;
-            wasKHeld = isK;
-            wasEnterHeld = isEnter;
+            wasKHeld = isLeftCtrl;
 
             if (attack2Triggered)
             {
-                lastDetectedInput = "K";
+                lastDetectedInput = "Ctrl Esq.";
                 return FighterAttackType.Attack2;
             }
 
             if (punchTriggered)
             {
-                lastDetectedInput = isJ ? "J" : (isSpace ? "Espaco" : "Enter");
-                return FighterAttackType.Punch;
-            }
-        }
-
-        if (Mouse.current != null)
-        {
-            bool isMouse = Mouse.current.leftButton.isPressed;
-            bool triggered = isMouse && !wasMouseHeld;
-            wasMouseHeld = isMouse;
-            if (triggered)
-            {
-                lastDetectedInput = "Mouse Esquerdo";
+                lastDetectedInput = "Espaco";
                 return FighterAttackType.Punch;
             }
         }
@@ -564,16 +588,12 @@ public class FighterController : MonoBehaviour
         {
             runtimeAttackAction = new InputAction(name: "Attack", type: InputActionType.Button);
             runtimeAttackAction.AddBinding("<Keyboard>/space");
-            runtimeAttackAction.AddBinding("<Keyboard>/j");
-            runtimeAttackAction.AddBinding("<Keyboard>/enter");
-            runtimeAttackAction.AddBinding("<Mouse>/leftButton");
             runtimeAttackAction.AddBinding("<Gamepad>/buttonSouth");
-            runtimeAttackAction.AddBinding("<Gamepad>/buttonWest");
             runtimeAttackAction.Enable();
         }
 
         runtimeAttack2Action = new InputAction(name: "Attack2", type: InputActionType.Button);
-        runtimeAttack2Action.AddBinding("<Keyboard>/k");
+        runtimeAttack2Action.AddBinding("<Keyboard>/leftCtrl");
         runtimeAttack2Action.AddBinding("<Gamepad>/buttonWest");
         runtimeAttack2Action.Enable();
     }
@@ -682,6 +702,7 @@ public class FighterController : MonoBehaviour
 
     public void ResetMatch()
     {
+        IsGuarding = false;
         if (healthSystem != null) healthSystem.ResetHealth();
         if (movement != null) movement.ResetMotion();
         ChangeState(NeutralState);
